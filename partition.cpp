@@ -74,10 +74,18 @@ static struct flag_list mount_flags[] = {
 	{ "remount",    MS_REMOUNT },
 	{ "bind",       MS_BIND },
 	{ "rec",        MS_REC },
+#ifdef MS_UNBINDABLE
 	{ "unbindable", MS_UNBINDABLE },
+#endif
+#ifdef MS_PRIVATE
 	{ "private",    MS_PRIVATE },
+#endif
+#ifdef MS_SLAVE
 	{ "slave",      MS_SLAVE },
+#endif
+#ifdef MS_SHARED
 	{ "shared",     MS_SHARED },
+#endif
 	{ "sync",       MS_SYNCHRONOUS },
 	{ "defaults",   0 },
 	{ 0,            0 },
@@ -391,7 +399,6 @@ bool TWPartition::Process_Fstab_Line(string Line, bool Display_Error) {
 		} else if (Mount_Point == "/recovery") {
 			Display_Name = "Recovery";
 			Backup_Display_Name = Display_Name;
-			Can_Be_Backed_Up = true;
 		}
 	}
 
@@ -458,8 +465,20 @@ bool TWPartition::Process_Flags(string Flags, bool Display_Error) {
 		ptr_len = strlen(ptr);
 		if (strcmp(ptr, "removable") == 0) {
 			Removable = true;
-		} else if (strcmp(ptr, "storage") == 0) {
-			Is_Storage = true;
+		} else if (strncmp(ptr, "storage", 7) == 0) {
+			if (ptr_len == 7) {
+				LOGINFO("ptr_len is 7, storage set to true\n");
+				Is_Storage = true;
+			} else if (ptr_len == 9) {
+				ptr += 9;
+				if (*ptr == '1' || *ptr == 'y' || *ptr == 'Y') {
+					LOGINFO("storage set to true\n");
+					Is_Storage = true;
+				} else {
+					LOGINFO("storage set to false\n");
+					Is_Storage = false;
+				}
+			}
 		} else if (strcmp(ptr, "settingsstorage") == 0) {
 			Is_Storage = true;
 		} else if (strcmp(ptr, "canbewiped") == 0) {
@@ -1519,8 +1538,9 @@ bool TWPartition::Wipe_Data_Without_Wiping_Media() {
 			// The media folder is the "internal sdcard"
 			// The .layout_version file is responsible for determining whether 4.2 decides up upgrade
 			// the media folder for multi-user.
+			//TODO: convert this to use twrpDU.cpp
 			if (strcmp(de->d_name, "media") == 0 || strcmp(de->d_name, ".layout_version") == 0)   continue;
-			
+
 			dir = "/data/";
 			dir.append(de->d_name);
 			if (de->d_type == DT_DIR) {
@@ -1531,6 +1551,7 @@ bool TWPartition::Wipe_Data_Without_Wiping_Media() {
 			}
 		}
 		closedir(d);
+
 		gui_print("Done.\n");
 		return true;
 	}
@@ -1575,35 +1596,12 @@ bool TWPartition::Backup_Tar(string backup_folder) {
 	Backup_FileName = back_name;
 	Full_FileName = backup_folder + "/" + Backup_FileName;
 	tar.has_data_media = Has_Data_Media;
-	if (!use_encryption && Backup_Size > MAX_ARCHIVE_SIZE) {
-		// This backup needs to be split into multiple archives
-		gui_print("Breaking backup file into multiple archives...\n");
-		sprintf(back_name, "%s", Backup_Path.c_str());
-		tar.setdir(back_name);
-		tar.setfn(Full_FileName);
-		backup_count = tar.splitArchiveFork();
-		if (backup_count == -1) {
-			LOGERR("Error tarring split files!\n");
-			return false;
-		}
-		return true;
-	} else {
-		Full_FileName = backup_folder + "/" + Backup_FileName;
-		tar.setdir(Backup_Path);
-		tar.setfn(Full_FileName);
-		if (tar.createTarFork() != 0)
-			return false;
-		if (use_compression && !use_encryption) {
-			string gzname = Full_FileName + ".gz";
-			rename(gzname.c_str(), Full_FileName.c_str());
-		}
-		if (use_encryption)
-			Full_FileName += "000";
-		if (TWFunc::Get_File_Size(Full_FileName) == 0) {
-			LOGERR("Backup file size for '%s' is 0 bytes.\n", Full_FileName.c_str());
-			return false;
-		}
-	}
+	Full_FileName = backup_folder + "/" + Backup_FileName;
+	tar.setdir(Backup_Path);
+	tar.setfn(Full_FileName);
+	tar.setsize(Backup_Size);
+	if (tar.createTarFork() != 0)
+		return false;
 	return true;
 }
 
@@ -1778,6 +1776,7 @@ bool TWPartition::Update_Size(bool Display_Error) {
 			unsigned long long data_media_used, actual_data;
 			du.add_relative_dir("media");
 			Used = du.Get_Folder_Size("/data");
+			du.clear_relative_dir("media");
 			Backup_Size = Used;
 			int bak = (int)(Used / 1048576LLU);
 			int fre = (int)(Free / 1048576LLU);
