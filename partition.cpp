@@ -40,6 +40,7 @@
 #include "twrpDigest.hpp"
 #include "twrpTar.hpp"
 #include "twrpDU.hpp"
+#include "fixPermissions.hpp"
 extern "C" {
 	#include "mtdutils/mtdutils.h"
 	#include "mtdutils/mounts.h"
@@ -52,6 +53,7 @@ extern "C" {
 }
 #ifdef HAVE_SELINUX
 #include "selinux/selinux.h"
+#include <selinux/label.h>
 #endif
 
 using namespace std;
@@ -361,10 +363,6 @@ bool TWPartition::Process_Fstab_Line(string Line, bool Display_Error) {
 			Is_Storage = true;
 			Removable = true;
 			Wipe_Available_in_GUI = true;
-#ifndef RECOVERY_SDCARD_ON_DATA
-			Setup_AndSec();
-			Mount_Storage_Retry();
-#endif
 #endif
 		}
 #ifdef TW_INTERNAL_STORAGE_PATH
@@ -373,20 +371,12 @@ bool TWPartition::Process_Fstab_Line(string Line, bool Display_Error) {
 			Is_Settings_Storage = true;
 			Storage_Path = EXPAND(TW_INTERNAL_STORAGE_PATH);
 			Wipe_Available_in_GUI = true;
-#ifndef RECOVERY_SDCARD_ON_DATA
-			Setup_AndSec();
-			Mount_Storage_Retry();
-#endif
 		}
 #else
 		if (Mount_Point == "/emmc" || Mount_Point == "/internal_sd" || Mount_Point == "/internal_sdcard") {
 			Is_Storage = true;
 			Is_Settings_Storage = true;
 			Wipe_Available_in_GUI = true;
-#ifndef RECOVERY_SDCARD_ON_DATA
-			Setup_AndSec();
-			Mount_Storage_Retry();
-#endif
 		}
 #endif
 	} else if (Is_Image(Fstab_File_System)) {
@@ -663,6 +653,7 @@ void TWPartition::Setup_AndSec(void) {
 	Backup_Path = Symlink_Mount_Point;
 	Make_Dir("/and-sec", true);
 	Recreate_AndSec_Folder();
+	Mount_Storage_Retry();
 }
 
 void TWPartition::Find_Real_Block_Device(string& Block, bool Display_Error) {
@@ -960,7 +951,7 @@ bool TWPartition::Mount(bool Display_Error) {
 			}
 			return true;
 		}
-	} else if (!exfat_mounted && mount(Actual_Block_Device.c_str(), Mount_Point.c_str(), Current_File_System.c_str(), Mount_Flags, Mount_Options.c_str()) != 0) {
+	} else if (!exfat_mounted && mount(Actual_Block_Device.c_str(), Mount_Point.c_str(), Current_File_System.c_str(), Mount_Flags, Mount_Options.c_str()) != 0 && mount(Actual_Block_Device.c_str(), Mount_Point.c_str(), Current_File_System.c_str(), Mount_Flags, NULL) != 0) {
 #ifdef TW_NO_EXFAT_FUSE
 		if (Current_File_System == "exfat") {
 			LOGINFO("Mounting exfat failed, trying vfat...\n");
@@ -1354,17 +1345,25 @@ bool TWPartition::Wipe_EXT4() {
 		return false;
 
 #if defined(HAVE_SELINUX) && defined(USE_EXT4)
+	int ret;
+	char *secontext = NULL;
+
 	gui_print("Formatting %s using make_ext4fs function.\n", Display_Name.c_str());
-	if (make_ext4fs(Actual_Block_Device.c_str(), Length, Mount_Point.c_str(), selinux_handle) != 0) {
+
+	if (selabel_lookup(selinux_handle, &secontext, Mount_Point.c_str(), S_IFDIR) < 0) {
+		LOGINFO("Cannot lookup security context for '%s'\n", Mount_Point.c_str());
+		ret = make_ext4fs(Actual_Block_Device.c_str(), Length, Mount_Point.c_str(), NULL);
+	} else {
+		ret = make_ext4fs(Actual_Block_Device.c_str(), Length, Mount_Point.c_str(), selinux_handle);
+	}
+	if (ret != 0) {
 		LOGERR("Unable to wipe '%s' using function call.\n", Mount_Point.c_str());
 		return false;
 	} else {
-		#ifdef HAVE_SELINUX
 		string sedir = Mount_Point + "/lost+found";
 		PartitionManager.Mount_By_Path(sedir.c_str(), true);
 		rmdir(sedir.c_str());
 		mkdir(sedir.c_str(), S_IRWXU | S_IRWXG | S_IWGRP | S_IXGRP);
-		#endif
 		return true;
 	}
 #else
@@ -1522,6 +1521,9 @@ bool TWPartition::Wipe_F2FS() {
 
 bool TWPartition::Wipe_Data_Without_Wiping_Media() {
 	string dir;
+	#ifdef HAVE_SELINUX
+	fixPermissions perms;
+	#endif
 
 	// This handles wiping data on devices with "sdcard" in /data/media
 	if (!Mount(true))
@@ -1551,6 +1553,10 @@ bool TWPartition::Wipe_Data_Without_Wiping_Media() {
 			}
 		}
 		closedir(d);
+
+		#ifdef HAVE_SELINUX
+		perms.fixDataInternalContexts();
+		#endif
 
 		gui_print("Done.\n");
 		return true;
@@ -1587,6 +1593,9 @@ bool TWPartition::Backup_Tar(string backup_folder) {
 		tar.use_encryption = use_encryption;
 		if (Use_Userdata_Encryption)
 			tar.userdata_encryption = use_encryption;
+		string Password;
+		DataManager::GetValue("tw_backup_password", Password);
+		tar.setpassword(Password);
 	} else {
 		use_encryption = false;
 	}
@@ -1675,37 +1684,18 @@ bool TWPartition::Restore_Tar(string restore_folder, string Restore_File_System)
 		return false;
 
 	Full_FileName = restore_folder + "/" + Backup_FileName;
-	/*if (!TWFunc::Path_Exists(Full_FileName)) {
-		if (!TWFunc::Path_Exists(Full_FileName)) {
-			// Backup is multiple archives
-			LOGINFO("Backup is multiple archives.\n");
-			sprintf(split_index, "%03i", index);
-			Full_FileName = restore_folder + "/" + Backup_FileName + split_index;
-			while (TWFunc::Path_Exists(Full_FileName)) {
-				index++;
-				gui_print("Restoring archive %i...\n", index);
-				LOGINFO("Restoring '%s'...\n", Full_FileName.c_str());
-				twrpTar tar;
-				tar.setdir("/");
-				tar.setfn(Full_FileName);
-				if (tar.extractTarFork() != 0)
-					return false;
-				sprintf(split_index, "%03i", index);
-				Full_FileName = restore_folder + "/" + Backup_FileName + split_index;
-			}
-			if (index == 0) {
-				LOGERR("Error locating restore file: '%s'\n", Full_FileName.c_str());
-				return false;
-			}
-		}
-	} else {*/
-		twrpTar tar;
-		tar.setdir(Backup_Path);
-		tar.setfn(Full_FileName);
-		tar.backup_name = Backup_Name;
-		if (tar.extractTarFork() != 0)
-			return false;
-	//}
+	twrpTar tar;
+	tar.setdir(Backup_Path);
+	tar.setfn(Full_FileName);
+	tar.backup_name = Backup_Name;
+#ifndef TW_EXCLUDE_ENCRYPTED_BACKUPS
+	string Password;
+	DataManager::GetValue("tw_restore_password", Password);
+	if (!Password.empty())
+		tar.setpassword(Password);
+#endif
+	if (tar.extractTarFork() != 0)
+		return false;
 	return true;
 }
 
@@ -1822,12 +1812,19 @@ void TWPartition::Find_Actual_Block_Device(void) {
 void TWPartition::Recreate_Media_Folder(void) {
 	string Command;
 
+	#ifdef HAVE_SELINUX
+	fixPermissions perms;
+	#endif
+
 	if (!Mount(true)) {
 		LOGERR("Unable to recreate /data/media folder.\n");
 	} else if (!TWFunc::Path_Exists("/data/media")) {
 		PartitionManager.Mount_By_Path(Symlink_Mount_Point, true);
 		LOGINFO("Recreating /data/media folder.\n");
 		mkdir("/data/media", S_IRWXU | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH); 
+		#ifdef HAVE_SELINUX
+		perms.fixDataInternalContexts();
+		#endif
 		PartitionManager.UnMount_By_Path(Symlink_Mount_Point, true);
 	}
 }

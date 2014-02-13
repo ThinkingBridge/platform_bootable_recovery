@@ -25,6 +25,7 @@
 #include <vector>
 #include <string>
 #include <map>
+#include <time.h>
 
 extern "C" {
 #ifdef HAVE_SELINUX
@@ -121,10 +122,11 @@ protected:
 	int mActionX, mActionY, mActionW, mActionH;
 };
 
-class Conditional
+class GUIObject
 {
 public:
-	Conditional(xml_node<>* node);
+	GUIObject(xml_node<>* node);
+	virtual ~GUIObject();
 
 public:
 	bool IsConditionVariable(std::string var);
@@ -168,7 +170,7 @@ protected:
 
 // Derived Objects
 // GUIText - Used for static text
-class GUIText : public RenderObject, public ActionObject, public Conditional
+class GUIText : public GUIObject, public RenderObject, public ActionObject
 {
 public:
 	// w and h may be ignored, in which case, no bounding box is applied
@@ -216,7 +218,7 @@ protected:
 };
 
 // GUIImage - Used for static image
-class GUIImage : public RenderObject, public Conditional
+class GUIImage : public GUIObject, public RenderObject
 {
 public:
 	GUIImage(xml_node<>* node);
@@ -239,7 +241,7 @@ protected:
 };
 
 // GUIFill - Used for fill colors
-class GUIFill : public RenderObject
+class GUIFill : public GUIObject, public RenderObject
 {
 public:
 	GUIFill(xml_node<>* node);
@@ -254,7 +256,7 @@ protected:
 };
 
 // GUIAction - Used for standard actions
-class GUIAction : public ActionObject, public Conditional
+class GUIAction : public GUIObject, public ActionObject
 {
 public:
 	GUIAction(xml_node<>* node);
@@ -285,9 +287,10 @@ protected:
 	void operation_start(const string operation_name);
 	void operation_end(const int operation_status, const int simulate);
 	static void* command_thread(void *cookie);
+	time_t Start;
 };
 
-class GUIConsole : public RenderObject, public ActionObject
+class GUIConsole : public GUIObject, public RenderObject, public ActionObject
 {
 public:
 	GUIConsole(xml_node<>* node);
@@ -345,7 +348,7 @@ protected:
 	virtual int RenderConsole(void);
 };
 
-class GUIButton : public RenderObject, public ActionObject, public Conditional
+class GUIButton : public GUIObject, public RenderObject, public ActionObject
 {
 public:
 	GUIButton(xml_node<>* node);
@@ -384,7 +387,7 @@ protected:
 	Placement TextPlacement;
 };
 
-class GUICheckbox: public RenderObject, public ActionObject, public Conditional
+class GUICheckbox: public GUIObject, public RenderObject, public ActionObject
 {
 public:
 	GUICheckbox(xml_node<>* node);
@@ -418,7 +421,7 @@ protected:
 	std::string mVarName;
 };
 
-class GUIFileSelector : public RenderObject, public ActionObject
+class GUIFileSelector : public GUIObject, public RenderObject, public ActionObject
 {
 public:
 	GUIFileSelector(xml_node<>* node);
@@ -522,7 +525,7 @@ protected:
 	bool updateFileList;
 };
 
-class GUIListBox : public RenderObject, public ActionObject
+class GUIListBox : public GUIObject, public RenderObject, public ActionObject
 {
 public:
 	GUIListBox(xml_node<>* node);
@@ -610,7 +613,7 @@ protected:
 	int touchDebounce;
 };
 
-class GUIPartitionList : public RenderObject, public ActionObject
+class GUIPartitionList : public GUIObject, public RenderObject, public ActionObject
 {
 public:
 	GUIPartitionList(xml_node<>* node);
@@ -695,7 +698,7 @@ protected:
 };
 
 // GUIAnimation - Used for animations
-class GUIAnimation : public RenderObject
+class GUIAnimation : public GUIObject, public RenderObject
 {
 public:
 	GUIAnimation(xml_node<>* node);
@@ -718,7 +721,7 @@ protected:
 	int mUpdateCount;
 };
 
-class GUIProgressBar : public RenderObject, public ActionObject
+class GUIProgressBar : public GUIObject, public RenderObject, public ActionObject
 {
 public:
 	GUIProgressBar(xml_node<>* node);
@@ -751,7 +754,7 @@ protected:
 	virtual int RenderInternal(void);	   // Does the actual render
 };
 
-class GUISlider : public RenderObject, public ActionObject
+class GUISlider : public GUIObject, public RenderObject, public ActionObject
 {
 public:
 	GUISlider(xml_node<>* node);
@@ -796,7 +799,7 @@ protected:
 #define KEYBOARD_SPECIAL_KEYS 245
 #define KEYBOARD_BACKSPACE 8
 
-class GUIKeyboard : public RenderObject, public ActionObject, public Conditional
+class GUIKeyboard : public GUIObject, public RenderObject, public ActionObject
 {
 public:
 	GUIKeyboard(xml_node<>* node);
@@ -834,7 +837,7 @@ protected:
 };
 
 // GUIInput - Used for keyboard input
-class GUIInput : public RenderObject, public ActionObject, public Conditional, public InputObject
+class GUIInput : public GUIObject, public RenderObject, public ActionObject, public InputObject
 {
 public:
 	// w and h may be ignored, in which case, no bounding box is applied
@@ -910,7 +913,7 @@ public:
 	virtual int KeyRepeat(void);
 };
 
-class GUISliderValue: public RenderObject, public ActionObject, public Conditional
+class GUISliderValue: public GUIObject, public RenderObject, public ActionObject
 {
 public:
 	GUISliderValue(xml_node<>* node);
@@ -974,6 +977,31 @@ protected:
 	GUIAction *mAction;
 	bool mChangeOnDrag;
 	int lineW;
+};
+
+class MouseCursor : public RenderObject
+{
+public:
+	MouseCursor(int posX, int posY);
+	virtual ~MouseCursor();
+
+	virtual int Render(void);
+	virtual int Update(void);
+	virtual int SetRenderPos(int x, int y, int w = 0, int h = 0);
+
+	void Move(int deltaX, int deltaY);
+	void GetPos(int& x, int& y);
+	void LoadData(xml_node<>* node);
+	void ResetData(int resX, int resY);
+
+private:
+	int m_resX;
+	int m_resY;
+	bool m_moved;
+	float m_speedMultiplier;
+	COLOR m_color;
+	Resource *m_image;
+	bool m_present;
 };
 
 // Helper APIs

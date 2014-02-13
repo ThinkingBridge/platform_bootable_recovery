@@ -51,7 +51,7 @@ public:
 	void setfn(string fn);
 	void setdir(string dir);
 	void setsize(unsigned long long backup_size);
-	unsigned long long uncompressedSize();
+	void setpassword(string pass);
 
 public:
 	int use_encryption;
@@ -89,6 +89,7 @@ private:
 	string tardir;
 	string tarfn;
 	string basefn;
+	string password;
 
 	vector <string> tarexclude;
 
